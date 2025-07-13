@@ -1,0 +1,92 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: notification-service
+  
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: notification-service-group
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      max-poll-records: 50
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: com.example.common.events.InventoryCheckResultEvent
+        
+  redis:
+    host: ${SPRING_DATA_REDIS_HOST:localhost}
+    port: ${SPRING_DATA_REDIS_PORT:6379}
+    timeout: ${SPRING_DATA_REDIS_TIMEOUT:5000ms}
+    jedis:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+        max-wait: -1ms
+
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+  
+  kafka:
+    bootstrap-servers: kafka:29092
+  
+  redis:
+    host: ${SPRING_DATA_REDIS_HOST:redis}
+    port: ${SPRING_DATA_REDIS_PORT:6379}
+    timeout: ${SPRING_DATA_REDIS_TIMEOUT:5000ms}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.example.notificationservice: DEBUG
+    com.example.notificationservice.service: DEBUG
+    com.example.notificationservice.listener: DEBUG
+    org.springframework.kafka: INFO
+    org.springframework.data.redis: INFO
+    org.springframework.retry: INFO
+    reactor.core: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# Kafka Topic Configuration
+kafka:
+  topics:
+    inventory-check-result: inventory-check-result
+  consumer:
+    retry:
+      attempts: 3
+      delay: 1000
+      multiplier: 2.0
+
+# Notification Configuration
+notification:
+  console:
+    enabled: true
+    display-full-order: true
+    show-timestamps: true
+  redis:
+    order-prefix: "order:"
+    retry-failed-prefix: "failed-notification:"
+    
+# Retry Configuration
+retry:
+  max-attempts: 3
+  initial-delay: 1000
+  multiplier: 2.0
+  max-delay: 10000 

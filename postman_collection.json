@@ -1,0 +1,341 @@
+{
+  "info": {
+    "name": "Home Assignment - Microservices",
+    "description": "Collection for testing the order processing microservices system",
+    "version": "1.0.0"
+  },
+  "item": [
+    {
+      "name": "Order Service",
+      "item": [
+        {
+          "name": "Create Order - Valid Standard Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Alice\",\n  \"items\": [\n    {\n      \"productId\": \"P1001\",\n      \"quantity\": 2,\n      \"category\": \"STANDARD\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:00:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:00:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Create Order - Digital Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Bob\",\n  \"items\": [\n    {\n      \"productId\": \"P2001\",\n      \"quantity\": 1,\n      \"category\": \"DIGITAL\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:05:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:05:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Create Order - Perishable Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Charlie\",\n  \"items\": [\n    {\n      \"productId\": \"P1003\",\n      \"quantity\": 5,\n      \"category\": \"PERISHABLE\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:10:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:10:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Create Order - Out of Stock Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"David\",\n  \"items\": [\n    {\n      \"productId\": \"P1002\",\n      \"quantity\": 3,\n      \"category\": \"STANDARD\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:15:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:15:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Create Order - Mixed Items",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Eve\",\n  \"items\": [\n    {\n      \"productId\": \"P1001\",\n      \"quantity\": 1,\n      \"category\": \"STANDARD\"\n    },\n    {\n      \"productId\": \"P2001\",\n      \"quantity\": 2,\n      \"category\": \"DIGITAL\"\n    },\n    {\n      \"productId\": \"P1005\",\n      \"quantity\": 1,\n      \"category\": \"PERISHABLE\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:20:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:20:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Get Order by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders/{{orderId}}",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders", "{{orderId}}"]
+            }
+          }
+        },
+        {
+          "name": "Get Order Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders/{{orderId}}/status",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders", "{{orderId}}", "status"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health Checks",
+      "item": [
+        {
+          "name": "Order Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8081/actuator/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["actuator", "health"]
+            }
+          }
+        },
+        {
+          "name": "Inventory Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8082/actuator/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8082",
+              "path": ["actuator", "health"]
+            }
+          }
+        },
+        {
+          "name": "Notification Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8083/actuator/health",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8083",
+              "path": ["actuator", "health"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Swagger UI",
+      "item": [
+        {
+          "name": "Order Service Swagger",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8081/swagger-ui.html",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["swagger-ui.html"]
+            }
+          }
+        },
+        {
+          "name": "Order Service OpenAPI Spec",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8081/api-docs",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api-docs"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error Scenarios",
+      "item": [
+        {
+          "name": "Invalid Order - Missing Customer Name",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"productId\": \"P1001\",\n      \"quantity\": 2,\n      \"category\": \"STANDARD\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:00:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:00:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Invalid Order - Empty Items",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Test User\",\n  \"items\": [],\n  \"requestId\": \"2025-06-30T14:00:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:00:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Invalid Order - Invalid Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Test User\",\n  \"items\": [\n    {\n      \"productId\": \"P1001\",\n      \"quantity\": 2,\n      \"category\": \"INVALID_CATEGORY\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:00:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:00:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        },
+        {
+          "name": "Invalid Order - Zero Quantity",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"customerName\": \"Test User\",\n  \"items\": [\n    {\n      \"productId\": \"P1001\",\n      \"quantity\": 0,\n      \"category\": \"STANDARD\"\n    }\n  ],\n  \"requestId\": \"2025-06-30T14:00:00Z\",\n  \"requestDateTime\": \"2025-06-30T14:00:00\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8081/api/v1/orders",
+              "protocol": "http",
+              "host": ["localhost"],
+              "port": "8081",
+              "path": ["api", "v1", "orders"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "orderId",
+      "value": "ORD-12345678",
+      "type": "string"
+    }
+  ]
+} 

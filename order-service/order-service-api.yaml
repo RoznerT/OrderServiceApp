@@ -1,0 +1,968 @@
+openapi: 3.0.3
+info:
+  title: Order Service API
+  description: |
+    שירות לניהול הזמנות במערכת מיקרו-שירותים
+    
+    השירות מספק פונקציונליות מלאה לניהול הזמנות:
+    - יצירת הזמנות חדשות
+    - שליפת פרטי הזמנות
+    - עדכון סטטוס הזמנות
+    - ניטור מצב המטמון והשירות
+    
+    השירות עובד עם Redis לאחסון זמני עם fallback למטמון מקומי
+    ומפרסם אירועים ל-Kafka לשירותים אחרים במערכת.
+  version: 1.0.0
+  contact:
+    name: Order Service Team
+    url: https://github.com/example/order-service
+    email: support@example.com
+  license:
+    name: MIT License
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8081
+    description: Development server
+  - url: http://order-service:8081
+    description: Docker container
+  - url: https://api.example.com
+    description: Production server
+
+tags:
+  - name: orders
+    description: ניהול הזמנות
+  - name: monitoring
+    description: ניטור ובדיקת זמינות
+  - name: cache
+    description: ניהול מטמון
+
+paths:
+  /api/v1/orders:
+    post:
+      tags:
+        - orders
+      summary: יצירת הזמנה חדשה
+      description: |
+        יוצר הזמנה חדשה במערכת.
+        
+        התהליך כולל:
+        1. אימות נתונים
+        2. יצירת הזמנה עם מזהה ייחודי
+        3. שמירה ב-Redis (עם fallback למטמון מקומי)
+        4. פרסום אירוע ל-Kafka לבדיקת מלאי
+        
+        סטטוס התחלתי של ההזמנה הוא תמיד PENDING.
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+            examples:
+              digital_order:
+                summary: הזמנה עם מוצר דיגיטלי
+                value:
+                  customerName: "דוד כהן"
+                  items:
+                    - productId: "DIGITAL-001"
+                      quantity: 1
+                      category: "DIGITAL"
+                  requestId: "2025-01-13T10:00:00Z"
+                  requestDateTime: "2025-01-13T10:00:00"
+              standard_order:
+                summary: הזמנה עם מוצרים רגילים
+                value:
+                  customerName: "שרה לוי"
+                  items:
+                    - productId: "P1001"
+                      quantity: 2
+                      category: "STANDARD"
+                    - productId: "P1003"
+                      quantity: 1
+                      category: "STANDARD"
+                  requestId: "2025-01-13T10:15:00Z"
+                  requestDateTime: "2025-01-13T10:15:00"
+              mixed_order:
+                summary: הזמנה מעורבת
+                value:
+                  customerName: "משה ישראלי"
+                  items:
+                    - productId: "P1001"
+                      quantity: 1
+                      category: "STANDARD"
+                    - productId: "P1005"
+                      quantity: 2
+                      category: "PERISHABLE"
+                    - productId: "DIGITAL-001"
+                      quantity: 1
+                      category: "DIGITAL"
+                  requestId: "2025-01-13T10:30:00Z"
+                  requestDateTime: "2025-01-13T10:30:00"
+      responses:
+        '201':
+          description: הזמנה נוצרה בהצלחה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                success_response:
+                  summary: הזמנה שנוצרה בהצלחה
+                  value:
+                    orderId: "550e8400-e29b-41d4-a716-446655440000"
+                    customerName: "דוד כהן"
+                    items:
+                      - productId: "DIGITAL-001"
+                        quantity: 1
+                        category: "DIGITAL"
+                    requestId: "2025-01-13T10:00:00Z"
+                    requestDateTime: "2025-01-13T10:00:00"
+                    status: "PENDING"
+                    createdAt: "2025-01-13T10:00:01"
+                    lastUpdated: "2025-01-13T10:00:01"
+        '400':
+          description: נתונים לא תקינים
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missing_customer:
+                  summary: חסר שם לקוח
+                  value:
+                    error: "Customer name cannot be null or empty"
+                    timestamp: "2025-01-13T10:00:00"
+                    path: "/api/v1/orders"
+                empty_items:
+                  summary: רשימת פריטים ריקה
+                  value:
+                    error: "Order items cannot be null or empty"
+                    timestamp: "2025-01-13T10:00:00"
+                    path: "/api/v1/orders"
+                invalid_quantity:
+                  summary: כמות לא תקינה
+                  value:
+                    error: "Quantity must be positive"
+                    timestamp: "2025-01-13T10:00:00"
+                    path: "/api/v1/orders"
+        '500':
+          description: שגיאה פנימית בשרת
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/orders/{orderId}:
+    get:
+      tags:
+        - orders
+      summary: שליפת הזמנה
+      description: |
+        מחזיר פרטי הזמנה מלאים לפי מזהה.
+        
+        השירות מחפש קודם ב-Redis ובמקרה של כשל עובר למטמון המקומי.
+        מחזיר 404 אם ההזמנה לא נמצאת.
+      operationId: getOrder
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          description: מזהה ייחודי של ההזמנה
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: פרטי ההזמנה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                approved_order:
+                  summary: הזמנה מאושרת
+                  value:
+                    orderId: "550e8400-e29b-41d4-a716-446655440000"
+                    customerName: "דוד כהן"
+                    items:
+                      - productId: "DIGITAL-001"
+                        quantity: 1
+                        category: "DIGITAL"
+                    requestId: "2025-01-13T10:00:00Z"
+                    requestDateTime: "2025-01-13T10:00:00"
+                    status: "APPROVED"
+                    createdAt: "2025-01-13T10:00:01"
+                    lastUpdated: "2025-01-13T10:00:05"
+                rejected_order:
+                  summary: הזמנה נדחתה
+                  value:
+                    orderId: "550e8400-e29b-41d4-a716-446655440001"
+                    customerName: "שרה לוי"
+                    items:
+                      - productId: "P1002"
+                        quantity: 10
+                        category: "STANDARD"
+                    requestId: "2025-01-13T10:15:00Z"
+                    requestDateTime: "2025-01-13T10:15:00"
+                    status: "REJECTED"
+                    createdAt: "2025-01-13T10:15:01"
+                    lastUpdated: "2025-01-13T10:15:03"
+        '404':
+          description: הזמנה לא נמצאה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                not_found:
+                  summary: הזמנה לא נמצאה
+                  value:
+                    error: "Order not found: 550e8400-e29b-41d4-a716-446655440000"
+                    timestamp: "2025-01-13T10:00:00"
+                    path: "/api/v1/orders/550e8400-e29b-41d4-a716-446655440000"
+        '500':
+          description: שגיאה פנימית בשרת
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/orders/{orderId}/status:
+    get:
+      tags:
+        - orders
+      summary: שליפת סטטוס הזמנה
+      description: |
+        מחזיר מידע מפורט על סטטוס ההזמנה.
+        
+        כולל מידע על:
+        - סטטוס נוכחי
+        - תאריך יצירה
+        - מקור הנתונים (Redis/Local Cache)
+      operationId: getOrderStatus
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          description: מזהה ייחודי של ההזמנה
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: סטטוס ההזמנה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderStatusResponse'
+              examples:
+                pending_status:
+                  summary: הזמנה ממתינה
+                  value:
+                    orderId: "550e8400-e29b-41d4-a716-446655440000"
+                    status: "PENDING"
+                    customerName: "דוד כהן"
+                    createdAt: "2025-01-13T10:00:01"
+                    source: "Redis"
+                approved_status:
+                  summary: הזמנה מאושרת
+                  value:
+                    orderId: "550e8400-e29b-41d4-a716-446655440001"
+                    status: "APPROVED"
+                    customerName: "שרה לוי"
+                    createdAt: "2025-01-13T10:15:01"
+                    source: "Local Cache"
+        '404':
+          description: הזמנה לא נמצאה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: שגיאה פנימית בשרת
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - orders
+      summary: עדכון סטטוס הזמנה
+      description: |
+        מעדכן את הסטטוס של הזמנה קיימת.
+        
+        הסטטוסים הזמינים:
+        - PENDING: הזמנה ממתינה לעיבוד
+        - PROCESSING: הזמנה בעיבוד
+        - APPROVED: הזמנה מאושרת
+        - REJECTED: הזמנה נדחתה
+        
+        העדכון נשמר ב-Redis ובמטמון המקומי.
+      operationId: updateOrderStatus
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          description: מזהה ייחודי של ההזמנה
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          required: true
+          description: הסטטוס החדש של ההזמנה
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+      responses:
+        '200':
+          description: ההזמנה עודכנה בהצלחה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                status_updated:
+                  summary: סטטוס עודכן בהצלחה
+                  value:
+                    orderId: "550e8400-e29b-41d4-a716-446655440000"
+                    customerName: "דוד כהן"
+                    items:
+                      - productId: "DIGITAL-001"
+                        quantity: 1
+                        category: "DIGITAL"
+                    requestId: "2025-01-13T10:00:00Z"
+                    requestDateTime: "2025-01-13T10:00:00"
+                    status: "APPROVED"
+                    createdAt: "2025-01-13T10:00:01"
+                    lastUpdated: "2025-01-13T10:05:00"
+        '404':
+          description: הזמנה לא נמצאה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: סטטוס לא תקין
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_status:
+                  summary: סטטוס לא תקין
+                  value:
+                    error: "Invalid order status: INVALID_STATUS"
+                    timestamp: "2025-01-13T10:00:00"
+                    path: "/api/v1/orders/550e8400-e29b-41d4-a716-446655440000/status"
+        '500':
+          description: שגיאה פנימית בשרת
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/orders/cache/status:
+    get:
+      tags:
+        - cache
+      summary: בדיקת מצב המטמון
+      description: |
+        מחזיר מידע מפורט על מצב המטמון והחיבור ל-Redis.
+        
+        מידע כולל:
+        - זמינות Redis
+        - מצב fallback
+        - גודל המטמון המקומי
+        - הגדרות TTL
+        
+        שימושי לניטור ואבחון בעיות.
+      operationId: getCacheStatus
+      responses:
+        '200':
+          description: מידע על מצב המטמון
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatusResponse'
+              examples:
+                redis_available:
+                  summary: Redis זמין
+                  value:
+                    redisAvailable: true
+                    fallbackMode: false
+                    localCacheSize: 5
+                    maxCacheSize: 1000
+                    cacheTtlMinutes: 30
+                    lastHealthCheck: "2025-01-13T10:00:00"
+                redis_unavailable:
+                  summary: Redis לא זמין
+                  value:
+                    redisAvailable: false
+                    fallbackMode: true
+                    localCacheSize: 12
+                    maxCacheSize: 1000
+                    cacheTtlMinutes: 30
+                    lastHealthCheck: "2025-01-13T10:00:00"
+                    error: "Connection timeout to Redis"
+        '500':
+          description: שגיאה פנימית בשרת
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/orders/health:
+    get:
+      tags:
+        - monitoring
+      summary: בדיקת זמינות השירות
+      description: |
+        מחזיר מידע מפורט על מצב השירות.
+        
+        בדיקות כוללות:
+        - זמינות השירות
+        - מצב חיבור ל-Redis
+        - מצב fallback
+        - זמן תגובה
+        
+        מחזיר 200 אם השירות פועל תקין, 503 אם יש בעיות.
+      operationId: healthCheck
+      responses:
+        '200':
+          description: השירות זמין
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                healthy:
+                  summary: השירות תקין
+                  value:
+                    status: "UP"
+                    timestamp: "2025-01-13T10:00:00"
+                    service: "order-service"
+                    version: "1.0.0"
+                    redis: true
+                    fallbackMode: false
+                    uptime: "PT1H30M"
+                    responseTime: "15ms"
+                degraded:
+                  summary: השירות פועל במצב מוגבל
+                  value:
+                    status: "UP"
+                    timestamp: "2025-01-13T10:00:00"
+                    service: "order-service"
+                    version: "1.0.0"
+                    redis: false
+                    fallbackMode: true
+                    uptime: "PT45M"
+                    responseTime: "25ms"
+                    warnings: ["Redis connection lost, using local cache"]
+        '503':
+          description: השירות לא זמין
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                unhealthy:
+                  summary: השירות לא זמין
+                  value:
+                    status: "DOWN"
+                    timestamp: "2025-01-13T10:00:00"
+                    service: "order-service"
+                    version: "1.0.0"
+                    redis: false
+                    fallbackMode: false
+                    error: "Critical system failure"
+                    uptime: "PT10M"
+
+  # Spring Boot Actuator endpoints
+  /actuator/health:
+    get:
+      tags:
+        - monitoring
+      summary: Spring Boot Health Check
+      description: |
+        בדיקת זמינות סטנדרטית של Spring Boot Actuator.
+        
+        מחזירה מידע על:
+        - מצב האפליקציה
+        - מצב Redis
+        - מצב Kafka
+        - מצב דיסק
+      operationId: actuatorHealth
+      responses:
+        '200':
+          description: מידע על מצב השירות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorHealthResponse'
+        '503':
+          description: השירות לא זמין
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorHealthResponse'
+
+components:
+  schemas:
+    OrderRequest:
+      type: object
+      required:
+        - customerName
+        - items
+        - requestId
+        - requestDateTime
+      properties:
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+          minLength: 1
+          maxLength: 255
+        items:
+          type: array
+          description: רשימת הפריטים בהזמנה
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        requestId:
+          type: string
+          description: מזהה ייחודי של הבקשה
+          example: "2025-01-13T10:00:00Z"
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+        requestDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת הבקשה
+          example: "2025-01-13T10:00:00"
+
+    Order:
+      type: object
+      required:
+        - orderId
+        - customerName
+        - items
+        - status
+        - createdAt
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+          readOnly: true
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+          minLength: 1
+          maxLength: 255
+        items:
+          type: array
+          description: רשימת הפריטים בהזמנה
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        requestId:
+          type: string
+          description: מזהה ייחודי של הבקשה המקורית
+          example: "2025-01-13T10:00:00Z"
+        requestDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת הבקשה
+          example: "2025-01-13T10:00:00"
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת ההזמנה
+          example: "2025-01-13T10:00:00"
+          readOnly: true
+        lastUpdated:
+          type: string
+          format: date-time
+          description: תאריך ושעה עדכון אחרון
+          example: "2025-01-13T10:05:00"
+          readOnly: true
+
+    OrderItem:
+      type: object
+      required:
+        - productId
+        - quantity
+        - category
+      properties:
+        productId:
+          type: string
+          description: מזהה המוצר
+          example: "P1001"
+          minLength: 1
+          maxLength: 100
+          pattern: '^[A-Z0-9-]+$'
+        quantity:
+          type: integer
+          description: כמות המוצר
+          example: 2
+          minimum: 1
+          maximum: 1000
+        category:
+          $ref: '#/components/schemas/Category'
+
+    OrderStatus:
+      type: string
+      description: |
+        סטטוס ההזמנה במערכת
+        
+        - PENDING: הזמנה נוצרה ומחכה לעיבוד
+        - PROCESSING: הזמנה בתהליך בדיקת מלאי
+        - APPROVED: הזמנה אושרה - כל הפריטים זמינים
+        - REJECTED: הזמנה נדחתה - חסרים פריטים או שגיאה
+      enum:
+        - PENDING
+        - PROCESSING
+        - APPROVED
+        - REJECTED
+      example: "PENDING"
+
+    Category:
+      type: string
+      description: |
+        קטגוריית המוצר - משפיעה על אופן בדיקת הזמינות
+        
+        - DIGITAL: מוצרים דיגיטליים - תמיד זמינים
+        - PERISHABLE: מוצרים מתכלים - דורש בדיקת תאריך תוקף
+        - STANDARD: מוצרים רגילים - דורש בדיקת מלאי במחסן
+      enum:
+        - DIGITAL
+        - PERISHABLE
+        - STANDARD
+      example: "STANDARD"
+
+    OrderStatusResponse:
+      type: object
+      required:
+        - orderId
+        - status
+        - customerName
+        - createdAt
+        - source
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+        createdAt:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת ההזמנה
+          example: "2025-01-13T10:00:00"
+        source:
+          type: string
+          description: מקור הנתונים
+          enum:
+            - Redis
+            - Local Cache
+          example: "Redis"
+
+    CacheStatusResponse:
+      type: object
+      required:
+        - redisAvailable
+        - fallbackMode
+        - localCacheSize
+        - maxCacheSize
+        - cacheTtlMinutes
+        - lastHealthCheck
+      properties:
+        redisAvailable:
+          type: boolean
+          description: האם Redis זמין
+          example: true
+        fallbackMode:
+          type: boolean
+          description: האם במצב fallback (מטמון מקומי בלבד)
+          example: false
+        localCacheSize:
+          type: integer
+          description: מספר הרשומות במטמון המקומי
+          example: 5
+          minimum: 0
+        maxCacheSize:
+          type: integer
+          description: גודל מקסימלי של המטמון המקומי
+          example: 1000
+          minimum: 1
+        cacheTtlMinutes:
+          type: integer
+          description: זמן תוקף של רשומות במטמון (דקות)
+          example: 30
+          minimum: 1
+        lastHealthCheck:
+          type: string
+          format: date-time
+          description: זמן הבדיקה האחרונה של Redis
+          example: "2025-01-13T10:00:00"
+        error:
+          type: string
+          description: הודעת שגיאה אם Redis לא זמין
+          example: "Connection timeout to Redis"
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - timestamp
+        - service
+        - version
+      properties:
+        status:
+          type: string
+          description: מצב השירות
+          enum:
+            - UP
+            - DOWN
+            - DEGRADED
+          example: "UP"
+        timestamp:
+          type: string
+          format: date-time
+          description: זמן הבדיקה
+          example: "2025-01-13T10:00:00"
+        service:
+          type: string
+          description: שם השירות
+          example: "order-service"
+        version:
+          type: string
+          description: גרסת השירות
+          example: "1.0.0"
+        redis:
+          type: boolean
+          description: מצב חיבור ל-Redis
+          example: true
+        fallbackMode:
+          type: boolean
+          description: האם במצב fallback
+          example: false
+        uptime:
+          type: string
+          description: זמן פעילות השירות
+          example: "PT1H30M"
+        responseTime:
+          type: string
+          description: זמן תגובה ממוצע
+          example: "15ms"
+        warnings:
+          type: array
+          description: אזהרות במצב השירות
+          items:
+            type: string
+          example: ["Redis connection lost, using local cache"]
+        error:
+          type: string
+          description: הודעת שגיאה אם השירות לא זמין
+          example: "Critical system failure"
+
+    ActuatorHealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - UP
+            - DOWN
+            - OUT_OF_SERVICE
+            - UNKNOWN
+          example: "UP"
+        components:
+          type: object
+          properties:
+            redis:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - UP
+                    - DOWN
+                details:
+                  type: object
+                  properties:
+                    version:
+                      type: string
+                      example: "7.0.0"
+            kafka:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - UP
+                    - DOWN
+            diskSpace:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - UP
+                    - DOWN
+                details:
+                  type: object
+                  properties:
+                    total:
+                      type: integer
+                      example: 499963170816
+                    free:
+                      type: integer
+                      example: 91275534336
+                    threshold:
+                      type: integer
+                      example: 10485760
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - timestamp
+        - path
+      properties:
+        error:
+          type: string
+          description: הודעת השגיאה
+          example: "Order not found"
+        timestamp:
+          type: string
+          format: date-time
+          description: זמן השגיאה
+          example: "2025-01-13T10:00:00"
+        path:
+          type: string
+          description: הנתיב שגרם לשגיאה
+          example: "/api/v1/orders/550e8400-e29b-41d4-a716-446655440000"
+        details:
+          type: object
+          description: פרטים נוספים על השגיאה
+          additionalProperties: true
+
+    # Kafka Events (for documentation purposes)
+    OrderCreatedEvent:
+      type: object
+      description: אירוע שמתפרסם כאשר הזמנה נוצרת
+      required:
+        - orderId
+        - customerName
+        - items
+        - requestId
+        - requestDateTime
+        - eventDateTime
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+        items:
+          type: array
+          description: רשימת הפריטים בהזמנה
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        requestId:
+          type: string
+          description: מזהה ייחודי של הבקשה
+          example: "2025-01-13T10:00:00Z"
+        requestDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת הבקשה
+          example: "2025-01-13T10:00:00"
+        eventDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת האירוע
+          example: "2025-01-13T10:00:01"
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: מפתח API לאימות בקשות
+
+  parameters:
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: מזהה ייחודי של ההזמנה
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+
+  responses:
+    NotFound:
+      description: המשאב לא נמצא
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            order_not_found:
+              value:
+                error: "Order not found"
+                timestamp: "2025-01-13T10:00:00"
+                path: "/api/v1/orders/550e8400-e29b-41d4-a716-446655440000"
+
+    BadRequest:
+      description: בקשה לא תקינה
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validation_error:
+              value:
+                error: "Customer name cannot be null or empty"
+                timestamp: "2025-01-13T10:00:00"
+                path: "/api/v1/orders"
+
+    InternalServerError:
+      description: שגיאה פנימית בשרת
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            server_error:
+              value:
+                error: "Internal server error"
+                timestamp: "2025-01-13T10:00:00"
+                path: "/api/v1/orders"
+
+# Optional security (can be enabled if needed)
+# security:
+#   - ApiKeyAuth: [] 

@@ -1,0 +1,72 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: order-service
+  
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      properties:
+        spring.json.add.type.headers: false
+  
+  redis:
+    host: ${SPRING_DATA_REDIS_HOST:localhost}
+    port: ${SPRING_DATA_REDIS_PORT:6379}
+    timeout: ${SPRING_DATA_REDIS_TIMEOUT:5000ms}
+    jedis:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+        max-wait: -1ms
+
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+  
+  kafka:
+    bootstrap-servers: kafka:29092
+  
+  redis:
+    host: ${SPRING_DATA_REDIS_HOST:redis}
+    port: ${SPRING_DATA_REDIS_PORT:6379}
+    timeout: ${SPRING_DATA_REDIS_TIMEOUT:5000ms}
+  
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.example.orderservice: DEBUG
+    com.example.orderservice.controller: DEBUG
+    com.example.orderservice.service: DEBUG
+    com.example.orderservice.exception: DEBUG
+    org.springframework.kafka: INFO
+    org.springframework.data.redis: INFO
+    org.springframework.web: INFO
+    org.springframework.validation: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# SpringDoc removed - using manual OpenAPI YAML generation
+# OpenAPI documentation is available through code annotations
+
+# Kafka Topic Configuration
+kafka:
+  topics:
+    order-created: order-created
+    inventory-check-result: inventory-check-result 

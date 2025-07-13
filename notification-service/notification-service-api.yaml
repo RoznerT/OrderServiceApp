@@ -1,0 +1,953 @@
+openapi: 3.0.3
+info:
+  title: Notification Service API
+  description: |
+    שירות הודעות במערכת מיקרו-שירותים
+    
+    השירות עובד כ-Event-Driven Service ומספק:
+    - קבלת תוצאות בדיקת מלאי מ-Kafka
+    - הצגת הודעות לקוח בקונסול
+    - שליפת פרטי הזמנות מ-Redis
+    - endpoints לניטור ובדיקת זמינות
+    
+    השירות מאזין לאירועי inventory-check-result ומציג הודעות
+    מפורטות על מצב ההזמנה (מאושרת/נדחתה) עם פרטים מלאים.
+    
+    מאפיינים:
+    - הודעות בזמן אמת
+    - תמיכה בהודעות מאושרות ונדחות
+    - הצגת פרטים מלאים על הזמנות
+    - מנגנון fallback במקרה של כשל Redis
+  version: 1.0.0
+  contact:
+    name: Notification Service Team
+    url: https://github.com/example/notification-service
+    email: support@example.com
+  license:
+    name: MIT License
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8083
+    description: Development server
+  - url: http://notification-service:8083
+    description: Docker container
+  - url: https://notifications-api.example.com
+    description: Production server
+
+tags:
+  - name: monitoring
+    description: ניטור ובדיקת זמינות
+  - name: events
+    description: אירועי Kafka (לתיעוד)
+  - name: notifications
+    description: מידע על מנגנון ההודעות
+
+paths:
+  # Spring Boot Actuator endpoints
+  /actuator/health:
+    get:
+      tags:
+        - monitoring
+      summary: Spring Boot Health Check
+      description: |
+        בדיקת זמינות סטנדרטית של Spring Boot Actuator.
+        
+        מחזירה מידע על:
+        - מצב האפליקציה
+        - מצב Redis (לשליפת פרטי הזמנות)
+        - מצב Kafka Consumer
+        - מצב דיסק
+        - מצב JVM
+      operationId: actuatorHealth
+      responses:
+        '200':
+          description: מידע על מצב השירות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorHealthResponse'
+              examples:
+                healthy:
+                  summary: השירות תקין
+                  value:
+                    status: "UP"
+                    components:
+                      redis:
+                        status: "UP"
+                        details:
+                          version: "7.0.0"
+                          connectionTime: "3ms"
+                      kafka:
+                        status: "UP"
+                        details:
+                          brokersCount: 1
+                          consumedMessages: 1247
+                      diskSpace:
+                        status: "UP"
+                        details:
+                          total: 499963170816
+                          free: 91275534336
+                          threshold: 10485760
+                      jvm:
+                        status: "UP"
+                        details:
+                          memory:
+                            used: 134217728
+                            max: 1073741824
+                          threads:
+                            count: 42
+                            peak: 45
+                unhealthy:
+                  summary: השירות לא תקין
+                  value:
+                    status: "DOWN"
+                    components:
+                      redis:
+                        status: "DOWN"
+                        details:
+                          error: "Connection timeout"
+                      kafka:
+                        status: "DOWN"
+                        details:
+                          error: "Consumer group not available"
+        '503':
+          description: השירות לא זמין
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorHealthResponse'
+
+  /actuator/info:
+    get:
+      tags:
+        - monitoring
+      summary: מידע על השירות
+      description: |
+        מחזיר מידע כללי על השירות.
+        
+        כולל:
+        - גרסת השירות
+        - זמן build
+        - גרסת Java
+        - מידע על הגדרות ההודעות
+        - מידע על Kafka consumer
+      operationId: actuatorInfo
+      responses:
+        '200':
+          description: מידע על השירות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorInfoResponse'
+              examples:
+                service_info:
+                  value:
+                    app:
+                      name: "notification-service"
+                      version: "1.0.0"
+                      description: "Notification and messaging service"
+                    build:
+                      time: "2025-01-13T08:00:00Z"
+                      artifact: "notification-service"
+                      group: "com.example"
+                    java:
+                      version: "17.0.1"
+                      vendor: "Eclipse Adoptium"
+                    notification:
+                      console:
+                        enabled: true
+                        displayFullOrder: true
+                        showTimestamps: true
+                      redis:
+                        orderPrefix: "order:"
+                        retryFailedPrefix: "failed-notification:"
+                    kafka:
+                      topics:
+                        input: "inventory-check-result"
+                      consumer:
+                        groupId: "notification-service-group"
+                        retryAttempts: 3
+                        concurrency: 2
+
+  /actuator/metrics:
+    get:
+      tags:
+        - monitoring
+      summary: מטריקות השירות
+      description: |
+        מחזיר רשימת מטריקות זמינות עבור השירות.
+        
+        כולל מטריקות על:
+        - מספר הודעות שהתקבלו
+        - מספר הודעות שהוצגו
+        - זמני תגובה
+        - שגיאות בעיבוד
+        - מצב Redis
+      operationId: actuatorMetrics
+      responses:
+        '200':
+          description: רשימת מטריקות זמינות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorMetricsResponse'
+
+  /actuator/metrics/{metricName}:
+    get:
+      tags:
+        - monitoring
+      summary: מטריקה ספציפית
+      description: |
+        מחזיר נתונים מפורטים על מטריקה ספציפית.
+        
+        דוגמאות למטריקות:
+        - kafka.consumer.records-consumed-total
+        - notification.displayed.total
+        - notification.displayed.approved
+        - notification.displayed.rejected
+        - notification.redis.retrieval.success
+        - notification.redis.retrieval.failed
+        - notification.processing.time
+        - jvm.memory.used
+      operationId: actuatorMetric
+      parameters:
+        - name: metricName
+          in: path
+          required: true
+          description: שם המטריקה
+          schema:
+            type: string
+            example: "notification.displayed.total"
+      responses:
+        '200':
+          description: נתוני המטריקה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorMetricResponse'
+              examples:
+                notifications_displayed:
+                  summary: הודעות שהוצגו
+                  value:
+                    name: "notification.displayed.total"
+                    description: "Total notifications displayed"
+                    measurements:
+                      - statistic: "COUNT"
+                        value: 523
+                    availableTags:
+                      - tag: "status"
+                        values: ["approved", "rejected"]
+                      - tag: "source"
+                        values: ["redis", "fallback"]
+                redis_retrieval:
+                  summary: שליפות מ-Redis
+                  value:
+                    name: "notification.redis.retrieval.success"
+                    description: "Successful Redis order retrievals"
+                    measurements:
+                      - statistic: "COUNT"
+                        value: 485
+                processing_time:
+                  summary: זמן עיבוד
+                  value:
+                    name: "notification.processing.time"
+                    description: "Time to process notification"
+                    baseUnit: "milliseconds"
+                    measurements:
+                      - statistic: "MEAN"
+                        value: 45.2
+                      - statistic: "MAX"
+                        value: 156.7
+        '404':
+          description: מטריקה לא נמצאה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actuator/prometheus:
+    get:
+      tags:
+        - monitoring
+      summary: מטריקות Prometheus
+      description: |
+        מחזיר מטריקות בפורמט Prometheus לניטור.
+        
+        כולל מטריקות על:
+        - הודעות שהתקבלו ועובדו
+        - שגיאות בעיבוד
+        - זמני תגובה
+        - מצב Redis
+        - מצב Kafka Consumer
+      operationId: actuatorPrometheus
+      responses:
+        '200':
+          description: מטריקות Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP notification_displayed_total Total notifications displayed
+                  # TYPE notification_displayed_total counter
+                  notification_displayed_total{status="approved"} 345.0
+                  notification_displayed_total{status="rejected"} 178.0
+                  
+                  # HELP notification_redis_retrieval_total Redis order retrievals
+                  # TYPE notification_redis_retrieval_total counter
+                  notification_redis_retrieval_success_total 485.0
+                  notification_redis_retrieval_failed_total 38.0
+                  
+                  # HELP notification_processing_time_seconds Processing time
+                  # TYPE notification_processing_time_seconds histogram
+                  notification_processing_time_seconds_bucket{le="0.01"} 234.0
+                  notification_processing_time_seconds_bucket{le="0.05"} 456.0
+                  notification_processing_time_seconds_bucket{le="0.1"} 523.0
+                  notification_processing_time_seconds_bucket{le="+Inf"} 523.0
+                  
+                  # HELP kafka_consumer_records_consumed_total Total records consumed
+                  # TYPE kafka_consumer_records_consumed_total counter
+                  kafka_consumer_records_consumed_total{client_id="notification-service"} 523.0
+
+components:
+  schemas:
+    # Core Event Schemas
+    InventoryCheckResultEvent:
+      type: object
+      description: |
+        אירוע תוצאות בדיקת מלאי שמתקבל מ-Inventory Service.
+        השירות מאזין לאירוע זה ומציג הודעה מתאימה.
+      required:
+        - orderId
+        - approved
+        - unavailableItems
+        - eventDateTime
+        - customerName
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        approved:
+          type: boolean
+          description: האם ההזמנה אושרה (כל הפריטים זמינים)
+          example: true
+        unavailableItems:
+          type: array
+          description: רשימת מוצרים שאינם זמינים
+          items:
+            type: string
+          example: ["P1002", "P1005"]
+        errorMessage:
+          type: string
+          description: הודעת שגיאה במידה וקיימת
+          example: "Product P1002 is out of stock"
+        eventDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת האירוע
+          example: "2025-01-13T10:00:05"
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+
+    Order:
+      type: object
+      description: |
+        מידע מלא על הזמנה המתקבל מ-Redis.
+        משמש להצגת הודעה מפורטת עם פרטי ההזמנה.
+      required:
+        - orderId
+        - customerName
+        - items
+        - status
+        - createdAt
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+        items:
+          type: array
+          description: רשימת הפריטים בהזמנה
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        requestId:
+          type: string
+          description: מזהה ייחודי של הבקשה המקורית
+          example: "2025-01-13T10:00:00Z"
+        requestDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת הבקשה
+          example: "2025-01-13T10:00:00"
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת ההזמנה
+          example: "2025-01-13T10:00:00"
+        lastUpdated:
+          type: string
+          format: date-time
+          description: תאריך ושעה עדכון אחרון
+          example: "2025-01-13T10:05:00"
+
+    OrderItem:
+      type: object
+      description: פריט בהזמנה
+      required:
+        - productId
+        - quantity
+        - category
+      properties:
+        productId:
+          type: string
+          description: מזהה המוצר
+          example: "P1001"
+        quantity:
+          type: integer
+          description: כמות המוצר
+          example: 2
+          minimum: 1
+        category:
+          $ref: '#/components/schemas/Category'
+
+    OrderStatus:
+      type: string
+      description: |
+        סטטוס ההזמנה במערכת
+        
+        - PENDING: הזמנה נוצרה ומחכה לעיבוד
+        - PROCESSING: הזמנה בתהליך בדיקת מלאי
+        - APPROVED: הזמנה אושרה - כל הפריטים זמינים
+        - REJECTED: הזמנה נדחתה - חסרים פריטים או שגיאה
+      enum:
+        - PENDING
+        - PROCESSING
+        - APPROVED
+        - REJECTED
+      example: "APPROVED"
+
+    Category:
+      type: string
+      description: |
+        קטגוריית המוצר
+        
+        - DIGITAL: מוצרים דיגיטליים - תמיד זמינים
+        - PERISHABLE: מוצרים מתכלים - בדיקת תאריך תוקף
+        - STANDARD: מוצרים רגילים - בדיקת מלאי במחסן
+      enum:
+        - DIGITAL
+        - PERISHABLE
+        - STANDARD
+      example: "STANDARD"
+
+    # Notification Display Schemas
+    NotificationDisplay:
+      type: object
+      description: |
+        מבנה הודעה שמוצגת בקונסול.
+        כולל את כל המידע הדרוש להצגה מפורטת.
+      required:
+        - orderId
+        - customerName
+        - status
+        - timestamp
+        - displayType
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+        status:
+          type: string
+          description: מצב ההזמנה
+          enum:
+            - APPROVED
+            - REJECTED
+          example: "APPROVED"
+        timestamp:
+          type: string
+          format: date-time
+          description: זמן הצגת ההודעה
+          example: "2025-01-13T10:00:00"
+        displayType:
+          type: string
+          description: סוג הצגה
+          enum:
+            - FULL_ORDER_DETAILS
+            - LIMITED_INFO
+          example: "FULL_ORDER_DETAILS"
+        orderDetails:
+          type: object
+          description: פרטי ההזמנה (אם זמינים)
+          properties:
+            itemsCount:
+              type: integer
+              description: מספר פריטים בהזמנה
+              example: 3
+            requestId:
+              type: string
+              description: מזהה הבקשה
+              example: "2025-01-13T10:00:00Z"
+            createdAt:
+              type: string
+              format: date-time
+              description: זמן יצירת ההזמנה
+              example: "2025-01-13T10:00:01"
+            source:
+              type: string
+              description: מקור הנתונים
+              enum:
+                - Redis
+                - Local Cache
+                - Fallback
+              example: "Redis"
+        rejectionDetails:
+          type: object
+          description: פרטי דחיית ההזמנה (אם נדחתה)
+          properties:
+            errorMessage:
+              type: string
+              description: הודעת שגיאה
+              example: "Product P1002 is out of stock"
+            unavailableItems:
+              type: array
+              description: רשימת מוצרים שאינם זמינים
+              items:
+                type: string
+              example: ["P1002", "P1005"]
+            unavailableCount:
+              type: integer
+              description: מספר מוצרים שאינם זמינים
+              example: 2
+
+    # Configuration Schemas
+    NotificationConfiguration:
+      type: object
+      description: הגדרות השירות
+      properties:
+        console:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+              description: האם הצגת הודעות בקונסול פעילה
+              example: true
+            displayFullOrder:
+              type: boolean
+              description: האם להציג פרטי הזמנה מלאים
+              example: true
+            showTimestamps:
+              type: boolean
+              description: האם להציג חותמות זמן
+              example: true
+        redis:
+          type: object
+          properties:
+            orderPrefix:
+              type: string
+              description: prefix למפתחות הזמנות ב-Redis
+              example: "order:"
+            retryFailedPrefix:
+              type: string
+              description: prefix למפתחות הודעות שנכשלו
+              example: "failed-notification:"
+        kafka:
+          type: object
+          properties:
+            topics:
+              type: object
+              properties:
+                input:
+                  type: string
+                  description: טופיק קלט
+                  example: "inventory-check-result"
+            consumer:
+              type: object
+              properties:
+                groupId:
+                  type: string
+                  description: מזהה קבוצת consumers
+                  example: "notification-service-group"
+                retryAttempts:
+                  type: integer
+                  description: מספר ניסיונות retry
+                  example: 3
+                concurrency:
+                  type: integer
+                  description: מספר consumers במקביל
+                  example: 2
+
+    # Actuator Response Schemas
+    ActuatorHealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: מצב כללי של השירות
+          enum:
+            - UP
+            - DOWN
+            - OUT_OF_SERVICE
+            - UNKNOWN
+          example: "UP"
+        components:
+          type: object
+          description: מצב רכיבים פנימיים
+          properties:
+            redis:
+              $ref: '#/components/schemas/ComponentHealth'
+            kafka:
+              $ref: '#/components/schemas/ComponentHealth'
+            diskSpace:
+              $ref: '#/components/schemas/ComponentHealth'
+            jvm:
+              $ref: '#/components/schemas/ComponentHealth'
+            notificationService:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [UP, DOWN]
+                details:
+                  type: object
+                  properties:
+                    displayEnabled:
+                      type: boolean
+                      example: true
+                    messagesProcessed:
+                      type: integer
+                      example: 523
+                    lastProcessedTime:
+                      type: string
+                      format: date-time
+                      example: "2025-01-13T10:00:00"
+
+    ComponentHealth:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - UP
+            - DOWN
+            - OUT_OF_SERVICE
+            - UNKNOWN
+          example: "UP"
+        details:
+          type: object
+          description: פרטים נוספים על הרכיב
+          additionalProperties: true
+
+    ActuatorInfoResponse:
+      type: object
+      properties:
+        app:
+          type: object
+          properties:
+            name:
+              type: string
+              example: "notification-service"
+            version:
+              type: string
+              example: "1.0.0"
+            description:
+              type: string
+              example: "Notification and messaging service"
+        build:
+          type: object
+          properties:
+            time:
+              type: string
+              format: date-time
+              example: "2025-01-13T08:00:00Z"
+            artifact:
+              type: string
+              example: "notification-service"
+            group:
+              type: string
+              example: "com.example"
+        java:
+          type: object
+          properties:
+            version:
+              type: string
+              example: "17.0.1"
+            vendor:
+              type: string
+              example: "Eclipse Adoptium"
+        notification:
+          $ref: '#/components/schemas/NotificationConfiguration'
+
+    ActuatorMetricsResponse:
+      type: object
+      required:
+        - names
+      properties:
+        names:
+          type: array
+          description: רשימת שמות המטריקות הזמינות
+          items:
+            type: string
+          example:
+            - "kafka.consumer.records-consumed-total"
+            - "notification.displayed.total"
+            - "notification.displayed.approved"
+            - "notification.displayed.rejected"
+            - "notification.redis.retrieval.success"
+            - "notification.redis.retrieval.failed"
+            - "notification.processing.time"
+            - "jvm.memory.used"
+            - "system.cpu.usage"
+
+    ActuatorMetricResponse:
+      type: object
+      required:
+        - name
+        - measurements
+      properties:
+        name:
+          type: string
+          description: שם המטריקה
+          example: "notification.displayed.total"
+        description:
+          type: string
+          description: תיאור המטריקה
+          example: "Total notifications displayed"
+        baseUnit:
+          type: string
+          description: יחידת מידה
+          example: "notifications"
+        measurements:
+          type: array
+          description: מדידות המטריקה
+          items:
+            type: object
+            properties:
+              statistic:
+                type: string
+                example: "COUNT"
+              value:
+                type: number
+                example: 523.0
+        availableTags:
+          type: array
+          description: תגיות זמינות לסינון
+          items:
+            type: object
+            properties:
+              tag:
+                type: string
+                example: "status"
+              values:
+                type: array
+                items:
+                  type: string
+                example: ["approved", "rejected"]
+
+    # Error Response Schema
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - timestamp
+        - path
+      properties:
+        error:
+          type: string
+          description: הודעת השגיאה
+          example: "Metric not found"
+        timestamp:
+          type: string
+          format: date-time
+          description: זמן השגיאה
+          example: "2025-01-13T10:00:00"
+        path:
+          type: string
+          description: הנתיב שגרם לשגיאה
+          example: "/actuator/metrics/nonexistent.metric"
+        status:
+          type: integer
+          description: קוד סטטוס HTTP
+          example: 404
+        details:
+          type: object
+          description: פרטים נוספים על השגיאה
+          additionalProperties: true
+
+    # Kafka Topic Schemas (for documentation)
+    KafkaTopicInfo:
+      type: object
+      description: מידע על טופיק Kafka
+      properties:
+        name:
+          type: string
+          description: שם הטופיק
+          example: "inventory-check-result"
+        description:
+          type: string
+          description: תיאור הטופיק
+          example: "Inventory check results from Inventory Service"
+        messageSchema:
+          type: string
+          description: סכמת ההודעות
+          example: "InventoryCheckResultEvent"
+        consumerGroup:
+          type: string
+          description: קבוצת consumers
+          example: "notification-service-group"
+        retryPolicy:
+          type: object
+          properties:
+            maxAttempts:
+              type: integer
+              example: 3
+            backoffDelay:
+              type: integer
+              example: 1000
+            multiplier:
+              type: number
+              example: 2.0
+            dlqTopic:
+              type: string
+              example: "inventory-check-result-dlq"
+
+  parameters:
+    MetricName:
+      name: metricName
+      in: path
+      required: true
+      description: שם המטריקה
+      schema:
+        type: string
+        pattern: '^[a-zA-Z][a-zA-Z0-9._-]*$'
+        example: "notification.displayed.total"
+
+  responses:
+    NotFound:
+      description: המשאב לא נמצא
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            metric_not_found:
+              value:
+                error: "Metric not found"
+                timestamp: "2025-01-13T10:00:00"
+                path: "/actuator/metrics/nonexistent.metric"
+                status: 404
+
+    ServiceUnavailable:
+      description: השירות לא זמין
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ActuatorHealthResponse'
+          examples:
+            service_down:
+              value:
+                status: "DOWN"
+                components:
+                  redis:
+                    status: "DOWN"
+                    details:
+                      error: "Connection timeout"
+                  kafka:
+                    status: "DOWN"
+                    details:
+                      error: "Consumer not connected"
+
+# Event-driven architecture documentation
+x-kafka-topics:
+  inventory-check-result:
+    description: "תוצאות בדיקת מלאי מ-Inventory Service"
+    schema: "#/components/schemas/InventoryCheckResultEvent"
+    consumer: "notification-service-group"
+    retryPolicy:
+      maxAttempts: 3
+      backoffDelay: 1000
+      multiplier: 2.0
+      dlqTopic: "inventory-check-result-dlq"
+
+x-notification-flow:
+  description: "תהליך הצגת הודעות"
+  steps:
+    1: "קבלת אירוע inventory-check-result מ-Kafka"
+    2: "שליפת פרטי הזמנה מ-Redis"
+    3: "בנייה והצגת הודעה בקונסול"
+    4: "טיפול בכשלים עם fallback"
+  fallback:
+    description: "במקרה של כשל ב-Redis"
+    behavior: "הצגת הודעה עם מידע מוגבל מהאירוע בלבד"
+  
+x-console-output-examples:
+  approved_order:
+    title: "הזמנה מאושרת"
+    output: |
+      ============================================================
+      ORDER NOTIFICATION
+      ============================================================
+      Order ID: 550e8400-e29b-41d4-a716-446655440000
+      Customer: דוד כהן
+      Status: APPROVED
+      Timestamp: 2025-01-13T10:00:00
+      Items Count: 2
+      Request ID: 2025-01-13T10:00:00Z
+      Created At: 2025-01-13T10:00:01
+      All items are available and the order has been approved!
+      ============================================================
+  
+  rejected_order:
+    title: "הזמנה נדחתה"
+    output: |
+      ============================================================
+      ORDER NOTIFICATION
+      ============================================================
+      Order ID: 550e8400-e29b-41d4-a716-446655440001
+      Customer: שרה לוי
+      Status: REJECTED
+      Timestamp: 2025-01-13T10:00:00
+      Items Count: 3
+      Request ID: 2025-01-13T10:15:00Z
+      Created At: 2025-01-13T10:15:01
+      REJECTION DETAILS:
+      Error: Product P1002 is out of stock
+      Unavailable Items:
+        - P1002
+        - P1005
+      ============================================================
+  
+  fallback_notification:
+    title: "הודעה עם מידע מוגבל"
+    output: |
+      ============================================================
+      ORDER NOTIFICATION (Limited Info)
+      ============================================================
+      Order ID: 550e8400-e29b-41d4-a716-446655440002
+      Customer: משה ישראלי
+      Status: APPROVED
+      Timestamp: 2025-01-13T10:00:00
+      Note: Could not retrieve full order details from Redis
+      All items are available and the order has been approved!
+      ============================================================ 

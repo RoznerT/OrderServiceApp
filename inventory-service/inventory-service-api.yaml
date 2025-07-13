@@ -1,0 +1,806 @@
+openapi: 3.0.3
+info:
+  title: Inventory Service API
+  description: |
+    שירות בדיקת מלאי במערכת מיקרו-שירותים
+    
+    השירות עובד כ-Event-Driven Service ומספק:
+    - בדיקת זמינות מוצרים לפי קטגוריות
+    - מימוש אסטרטגיות בדיקה שונות (Strategy Pattern)
+    - פרסום תוצאות בדיקה ל-Kafka
+    - endpoints לניטור ובדיקת זמינות
+    
+    השירות מאזין לאירועי order-created ומפרסם inventory-check-result.
+    
+    אסטרטגיות בדיקה:
+    - DIGITAL: מוצרים דיגיטליים - תמיד זמינים
+    - PERISHABLE: מוצרים מתכלים - בדיקת תאריך תוקף
+    - STANDARD: מוצרים רגילים - בדיקת מלאי במחסן
+  version: 1.0.0
+  contact:
+    name: Inventory Service Team
+    url: https://github.com/example/inventory-service
+    email: support@example.com
+  license:
+    name: MIT License
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8082
+    description: Development server
+  - url: http://inventory-service:8082
+    description: Docker container
+  - url: https://inventory-api.example.com
+    description: Production server
+
+tags:
+  - name: monitoring
+    description: ניטור ובדיקת זמינות
+  - name: events
+    description: אירועי Kafka (לתיעוד)
+  - name: inventory
+    description: מידע על המלאי והאסטרטגיות
+
+paths:
+  # Spring Boot Actuator endpoints
+  /actuator/health:
+    get:
+      tags:
+        - monitoring
+      summary: Spring Boot Health Check
+      description: |
+        בדיקת זמינות סטנדרטית של Spring Boot Actuator.
+        
+        מחזירה מידע על:
+        - מצב האפליקציה
+        - מצב Redis
+        - מצב Kafka Consumer
+        - מצב דיסק
+        - מצב JVM
+      operationId: actuatorHealth
+      responses:
+        '200':
+          description: מידע על מצב השירות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorHealthResponse'
+              examples:
+                healthy:
+                  summary: השירות תקין
+                  value:
+                    status: "UP"
+                    components:
+                      redis:
+                        status: "UP"
+                        details:
+                          version: "7.0.0"
+                      kafka:
+                        status: "UP"
+                        details:
+                          brokersCount: 1
+                      diskSpace:
+                        status: "UP"
+                        details:
+                          total: 499963170816
+                          free: 91275534336
+                          threshold: 10485760
+                      jvm:
+                        status: "UP"
+                        details:
+                          memory:
+                            used: 268435456
+                            max: 1073741824
+                unhealthy:
+                  summary: השירות לא תקין
+                  value:
+                    status: "DOWN"
+                    components:
+                      redis:
+                        status: "DOWN"
+                        details:
+                          error: "Connection refused"
+                      kafka:
+                        status: "DOWN"
+                        details:
+                          error: "Unable to connect to Kafka brokers"
+        '503':
+          description: השירות לא זמין
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorHealthResponse'
+
+  /actuator/info:
+    get:
+      tags:
+        - monitoring
+      summary: מידע על השירות
+      description: |
+        מחזיר מידע כללי על השירות.
+        
+        כולל:
+        - גרסת השירות
+        - זמן build
+        - גרסת Java
+        - מידע על האסטרטגיות הזמינות
+      operationId: actuatorInfo
+      responses:
+        '200':
+          description: מידע על השירות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorInfoResponse'
+              examples:
+                service_info:
+                  value:
+                    app:
+                      name: "inventory-service"
+                      version: "1.0.0"
+                      description: "Inventory management service"
+                    build:
+                      time: "2025-01-13T08:00:00Z"
+                      artifact: "inventory-service"
+                      group: "com.example"
+                    java:
+                      version: "17.0.1"
+                      vendor: "Eclipse Adoptium"
+                    strategies:
+                      - name: "DIGITAL"
+                        description: "Digital products - always available"
+                      - name: "PERISHABLE"
+                        description: "Perishable products - expiration date check"
+                      - name: "STANDARD"
+                        description: "Standard products - stock level check"
+
+  /actuator/metrics:
+    get:
+      tags:
+        - monitoring
+      summary: מטריקות השירות
+      description: |
+        מחזיר רשימת מטריקות זמינות עבור השירות.
+        
+        כולל מטריקות על:
+        - צריכת זיכרון
+        - מספר הודעות Kafka
+        - זמני תגובה
+        - מספר בדיקות מלאי
+      operationId: actuatorMetrics
+      responses:
+        '200':
+          description: רשימת מטריקות זמינות
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorMetricsResponse'
+
+  /actuator/metrics/{metricName}:
+    get:
+      tags:
+        - monitoring
+      summary: מטריקה ספציפית
+      description: |
+        מחזיר נתונים מפורטים על מטריקה ספציפית.
+        
+        דוגמאות למטריקות:
+        - kafka.consumer.records-consumed-total
+        - inventory.checks.total
+        - inventory.checks.approved
+        - inventory.checks.rejected
+        - jvm.memory.used
+      operationId: actuatorMetric
+      parameters:
+        - name: metricName
+          in: path
+          required: true
+          description: שם המטריקה
+          schema:
+            type: string
+            example: "kafka.consumer.records-consumed-total"
+      responses:
+        '200':
+          description: נתוני המטריקה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActuatorMetricResponse'
+              examples:
+                kafka_consumed:
+                  summary: הודעות Kafka שנצרכו
+                  value:
+                    name: "kafka.consumer.records-consumed-total"
+                    description: "Total number of records consumed"
+                    measurements:
+                      - statistic: "COUNT"
+                        value: 1247
+                inventory_checks:
+                  summary: בדיקות מלאי
+                  value:
+                    name: "inventory.checks.total"
+                    description: "Total inventory checks performed"
+                    measurements:
+                      - statistic: "COUNT"
+                        value: 523
+                    availableTags:
+                      - tag: "result"
+                        values: ["approved", "rejected"]
+                      - tag: "category"
+                        values: ["DIGITAL", "PERISHABLE", "STANDARD"]
+        '404':
+          description: מטריקה לא נמצאה
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /actuator/prometheus:
+    get:
+      tags:
+        - monitoring
+      summary: מטריקות Prometheus
+      description: |
+        מחזיר מטריקות בפורמט Prometheus לניטור.
+        
+        כולל מטריקות על:
+        - בדיקות מלאי לפי קטגוריה
+        - זמני עיבוד
+        - מצב Kafka Consumer
+        - מצב Redis
+      operationId: actuatorPrometheus
+      responses:
+        '200':
+          description: מטריקות Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP inventory_checks_total Total number of inventory checks
+                  # TYPE inventory_checks_total counter
+                  inventory_checks_total{category="DIGITAL",result="approved"} 145.0
+                  inventory_checks_total{category="PERISHABLE",result="approved"} 78.0
+                  inventory_checks_total{category="PERISHABLE",result="rejected"} 12.0
+                  inventory_checks_total{category="STANDARD",result="approved"} 234.0
+                  inventory_checks_total{category="STANDARD",result="rejected"} 54.0
+                  
+                  # HELP kafka_consumer_records_consumed_total Total records consumed
+                  # TYPE kafka_consumer_records_consumed_total counter
+                  kafka_consumer_records_consumed_total{client_id="inventory-service"} 1247.0
+                  
+                  # HELP jvm_memory_used_bytes Used memory
+                  # TYPE jvm_memory_used_bytes gauge
+                  jvm_memory_used_bytes{area="heap",id="G1 Old Gen"} 1.34217728E8
+
+components:
+  schemas:
+    # Core Event Schemas
+    OrderCreatedEvent:
+      type: object
+      description: |
+        אירוע שמתקבל מ-Order Service כאשר הזמנה נוצרת.
+        השירות מאזין לאירוע זה ומפעיל בדיקת מלאי.
+      required:
+        - orderId
+        - customerName
+        - items
+        - requestId
+        - requestDateTime
+        - eventDateTime
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+        items:
+          type: array
+          description: רשימת הפריטים בהזמנה
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        requestId:
+          type: string
+          description: מזהה ייחודי של הבקשה
+          example: "2025-01-13T10:00:00Z"
+        requestDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת הבקשה
+          example: "2025-01-13T10:00:00"
+        eventDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת האירוע
+          example: "2025-01-13T10:00:01"
+
+    InventoryCheckResultEvent:
+      type: object
+      description: |
+        אירוע שמפרסם השירות אחרי בדיקת מלאי.
+        נשלח ל-Kafka לעיבוד בשירותים אחרים.
+      required:
+        - orderId
+        - approved
+        - unavailableItems
+        - eventDateTime
+        - customerName
+      properties:
+        orderId:
+          type: string
+          format: uuid
+          description: מזהה ייחודי של ההזמנה
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        approved:
+          type: boolean
+          description: האם ההזמנה אושרה (כל הפריטים זמינים)
+          example: true
+        unavailableItems:
+          type: array
+          description: רשימת מוצרים שאינם זמינים
+          items:
+            type: string
+          example: ["P1002", "P1005"]
+        errorMessage:
+          type: string
+          description: הודעת שגיאה במידה וקיימת
+          example: "Product P1002 is out of stock"
+        eventDateTime:
+          type: string
+          format: date-time
+          description: תאריך ושעה יצירת האירוע
+          example: "2025-01-13T10:00:05"
+        customerName:
+          type: string
+          description: שם הלקוח
+          example: "דוד כהן"
+
+    OrderItem:
+      type: object
+      description: פריט בהזמנה עם מידע על קטגוריה לבדיקת מלאי
+      required:
+        - productId
+        - quantity
+        - category
+      properties:
+        productId:
+          type: string
+          description: מזהה המוצר
+          example: "P1001"
+          minLength: 1
+          maxLength: 100
+        quantity:
+          type: integer
+          description: כמות המוצר
+          example: 2
+          minimum: 1
+          maximum: 1000
+        category:
+          $ref: '#/components/schemas/Category'
+
+    Category:
+      type: string
+      description: |
+        קטגוריית המוצר - קובעת את אסטרטגיית הבדיקה
+        
+        אסטרטגיות בדיקה:
+        - DIGITAL: מוצרים דיגיטליים
+          * תמיד זמינים
+          * אין צורך בבדיקת מלאי
+          * מתאים לתוכנות, רישיונות, קבצים
+        
+        - PERISHABLE: מוצרים מתכלים
+          * בדיקת תאריך תוקף
+          * נדחה אם תאריך התוקף עבר
+          * מתאים למזון, תרופות, קוסמטיקה
+        
+        - STANDARD: מוצרים רגילים
+          * בדיקת מלאי במחסן
+          * נדחה אם אין מלאי מספיק
+          * מתאים לרוב המוצרים הפיזיים
+      enum:
+        - DIGITAL
+        - PERISHABLE
+        - STANDARD
+      example: "STANDARD"
+
+    # Inventory Strategy Information
+    InventoryStrategy:
+      type: object
+      description: מידע על אסטרטגיית בדיקת מלאי
+      required:
+        - name
+        - description
+        - categoryType
+        - checkLogic
+      properties:
+        name:
+          type: string
+          description: שם האסטרטגיה
+          example: "DigitalInventoryStrategy"
+        description:
+          type: string
+          description: תיאור האסטרטגיה
+          example: "Digital products - always available"
+        categoryType:
+          $ref: '#/components/schemas/Category'
+        checkLogic:
+          type: string
+          description: הסבר על לוגיקת הבדיקה
+          example: "Digital products are always available regardless of quantity"
+        examples:
+          type: array
+          description: דוגמאות למוצרים בקטגוריה
+          items:
+            type: string
+          example: ["DIGITAL-001", "SOFTWARE-123", "LICENSE-456"]
+
+    # Actuator Response Schemas
+    ActuatorHealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: מצב כללי של השירות
+          enum:
+            - UP
+            - DOWN
+            - OUT_OF_SERVICE
+            - UNKNOWN
+          example: "UP"
+        components:
+          type: object
+          description: מצב רכיבים פנימיים
+          properties:
+            redis:
+              $ref: '#/components/schemas/ComponentHealth'
+            kafka:
+              $ref: '#/components/schemas/ComponentHealth'
+            diskSpace:
+              $ref: '#/components/schemas/ComponentHealth'
+            jvm:
+              $ref: '#/components/schemas/ComponentHealth'
+            inventoryStrategies:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [UP, DOWN]
+                details:
+                  type: object
+                  properties:
+                    strategiesCount:
+                      type: integer
+                      example: 3
+                    loadedStrategies:
+                      type: array
+                      items:
+                        type: string
+                      example: ["DIGITAL", "PERISHABLE", "STANDARD"]
+
+    ComponentHealth:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - UP
+            - DOWN
+            - OUT_OF_SERVICE
+            - UNKNOWN
+          example: "UP"
+        details:
+          type: object
+          description: פרטים נוספים על הרכיב
+          additionalProperties: true
+          example:
+            version: "7.0.0"
+            connectionTime: "5ms"
+
+    ActuatorInfoResponse:
+      type: object
+      properties:
+        app:
+          type: object
+          properties:
+            name:
+              type: string
+              example: "inventory-service"
+            version:
+              type: string
+              example: "1.0.0"
+            description:
+              type: string
+              example: "Inventory management service"
+        build:
+          type: object
+          properties:
+            time:
+              type: string
+              format: date-time
+              example: "2025-01-13T08:00:00Z"
+            artifact:
+              type: string
+              example: "inventory-service"
+            group:
+              type: string
+              example: "com.example"
+        java:
+          type: object
+          properties:
+            version:
+              type: string
+              example: "17.0.1"
+            vendor:
+              type: string
+              example: "Eclipse Adoptium"
+        strategies:
+          type: array
+          description: רשימת אסטרטגיות בדיקת מלאי זמינות
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: "DIGITAL"
+              description:
+                type: string
+                example: "Digital products - always available"
+              class:
+                type: string
+                example: "com.example.inventoryservice.strategy.DigitalInventoryStrategy"
+        kafka:
+          type: object
+          properties:
+            topics:
+              type: object
+              properties:
+                input:
+                  type: string
+                  example: "order-created"
+                output:
+                  type: string
+                  example: "inventory-check-result"
+            consumer:
+              type: object
+              properties:
+                groupId:
+                  type: string
+                  example: "inventory-service-group"
+                retryAttempts:
+                  type: integer
+                  example: 3
+
+    ActuatorMetricsResponse:
+      type: object
+      required:
+        - names
+      properties:
+        names:
+          type: array
+          description: רשימת שמות המטריקות הזמינות
+          items:
+            type: string
+          example:
+            - "kafka.consumer.records-consumed-total"
+            - "inventory.checks.total"
+            - "inventory.checks.approved"
+            - "inventory.checks.rejected"
+            - "inventory.processing.time"
+            - "jvm.memory.used"
+            - "system.cpu.usage"
+            - "redis.commands.processed"
+
+    ActuatorMetricResponse:
+      type: object
+      required:
+        - name
+        - measurements
+      properties:
+        name:
+          type: string
+          description: שם המטריקה
+          example: "inventory.checks.total"
+        description:
+          type: string
+          description: תיאור המטריקה
+          example: "Total inventory checks performed"
+        baseUnit:
+          type: string
+          description: יחידת מידה
+          example: "operations"
+        measurements:
+          type: array
+          description: מדידות המטריקה
+          items:
+            type: object
+            properties:
+              statistic:
+                type: string
+                example: "COUNT"
+              value:
+                type: number
+                example: 1247.0
+        availableTags:
+          type: array
+          description: תגיות זמינות לסינון
+          items:
+            type: object
+            properties:
+              tag:
+                type: string
+                example: "category"
+              values:
+                type: array
+                items:
+                  type: string
+                example: ["DIGITAL", "PERISHABLE", "STANDARD"]
+
+    # Error Response Schema
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - timestamp
+        - path
+      properties:
+        error:
+          type: string
+          description: הודעת השגיאה
+          example: "Metric not found"
+        timestamp:
+          type: string
+          format: date-time
+          description: זמן השגיאה
+          example: "2025-01-13T10:00:00"
+        path:
+          type: string
+          description: הנתיב שגרם לשגיאה
+          example: "/actuator/metrics/nonexistent.metric"
+        status:
+          type: integer
+          description: קוד סטטוס HTTP
+          example: 404
+        details:
+          type: object
+          description: פרטים נוספים על השגיאה
+          additionalProperties: true
+
+    # Kafka Topic Schemas (for documentation)
+    KafkaTopicInfo:
+      type: object
+      description: מידע על טופיק Kafka
+      properties:
+        name:
+          type: string
+          description: שם הטופיק
+          example: "order-created"
+        description:
+          type: string
+          description: תיאור הטופיק
+          example: "Orders created by Order Service"
+        messageSchema:
+          type: string
+          description: סכמת ההודעות
+          example: "OrderCreatedEvent"
+        consumerGroup:
+          type: string
+          description: קבוצת consumers
+          example: "inventory-service-group"
+        retryPolicy:
+          type: object
+          properties:
+            maxAttempts:
+              type: integer
+              example: 3
+            backoffDelay:
+              type: integer
+              example: 1000
+            multiplier:
+              type: number
+              example: 2.0
+            dlqTopic:
+              type: string
+              example: "order-created-dlq"
+
+  parameters:
+    MetricName:
+      name: metricName
+      in: path
+      required: true
+      description: שם המטריקה
+      schema:
+        type: string
+        pattern: '^[a-zA-Z][a-zA-Z0-9._-]*$'
+        example: "inventory.checks.total"
+
+  responses:
+    NotFound:
+      description: המשאב לא נמצא
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            metric_not_found:
+              value:
+                error: "Metric not found"
+                timestamp: "2025-01-13T10:00:00"
+                path: "/actuator/metrics/nonexistent.metric"
+                status: 404
+
+    ServiceUnavailable:
+      description: השירות לא זמין
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ActuatorHealthResponse'
+          examples:
+            service_down:
+              value:
+                status: "DOWN"
+                components:
+                  redis:
+                    status: "DOWN"
+                    details:
+                      error: "Connection timeout"
+                  kafka:
+                    status: "DOWN"
+                    details:
+                      error: "No available brokers"
+
+# Event-driven architecture documentation
+x-kafka-topics:
+  order-created:
+    description: "הזמנות שנוצרו מ-Order Service"
+    schema: "#/components/schemas/OrderCreatedEvent"
+    consumer: "inventory-service-group"
+    retryPolicy:
+      maxAttempts: 3
+      backoffDelay: 1000
+      multiplier: 2.0
+      dlqTopic: "order-created-dlq"
+  
+  inventory-check-result:
+    description: "תוצאות בדיקת מלאי"
+    schema: "#/components/schemas/InventoryCheckResultEvent"
+    producer: "inventory-service"
+    consumers:
+      - "notification-service-group"
+
+x-strategies:
+  digital:
+    name: "DigitalInventoryStrategy"
+    category: "DIGITAL"
+    description: "מוצרים דיגיטליים - תמיד זמינים"
+    logic: "return true"
+    examples: ["DIGITAL-001", "SOFTWARE-123", "LICENSE-456"]
+  
+  perishable:
+    name: "PerishableInventoryStrategy"
+    category: "PERISHABLE"
+    description: "מוצרים מתכלים - בדיקת תאריך תוקף"
+    logic: "check if expiration date > current date"
+    examples: ["P1001", "P1003", "P1004"]
+    testData:
+      expired: ["P1002", "P1005"]
+      valid: ["P1001", "P1003", "P1004"]
+  
+  standard:
+    name: "StandardInventoryStrategy"
+    category: "STANDARD"
+    description: "מוצרים רגילים - בדיקת מלאי"
+    logic: "check if available stock >= requested quantity"
+    examples: ["P1001", "P1003", "P1004"]
+    testData:
+      inStock: {"P1001": 100, "P1003": 50, "P1004": 25}
+      outOfStock: {"P1002": 0, "P1006": 0}
+      lowStock: {"P1005": 5} 
